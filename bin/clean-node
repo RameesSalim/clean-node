@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+print_usage () {
+	printf '%s\n' 'Usage: clean-node [path] [options]'
+	printf '%s\n' ''
+	printf '%s\n' 'Options:'
+	printf '%s\n' '  -n, --dry-run   List matches only'
+	printf '%s\n' '  -y, --yes       Delete without prompting'
+	printf '%s\n' '  -h, --help      Show this help'
+}
+
+get_size_kb () {
+	du -sk "$1" | awk '{print $1}'
+}
+
+format_size () {
+	awk -v kb="$1" 'BEGIN {
+		x = kb * 1024
+		n = split("B K M G T P", u, " ")
+		i = 1
+		while (x >= 1024 && i < n) {
+			x = x / 1024
+			i++
+		}
+		printf "%.1f%s", x, u[i]
+	}'
+}
+
+target='.'
+dry_run='false'
+auto_yes='false'
+target_set='false'
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-n|--dry-run)
+			dry_run='true'
+			;;
+		-y|--yes)
+			auto_yes='true'
+			;;
+		-h|--help)
+			print_usage
+			exit 0
+			;;
+		*)
+			if [ "$target_set" = 'false' ]; then
+				target="$1"
+				target_set='true'
+			else
+				printf '%s\n' "Unknown argument: $1"
+				print_usage
+				exit 1
+			fi
+			;;
+	esac
+	shift
+done
+
+if [ ! -d "$target" ]; then
+	printf '%s\n' "Path not found: $target"
+	exit 1
+fi
+
+matches=()
+while IFS= read -r match; do
+	matches+=("$match")
+done < <(find "$target" -type d -name node_modules -prune -print)
+
+if [ "${#matches[@]}" -eq 0 ]; then
+	printf '%s\n' 'No node_modules folders found.'
+	exit 0
+fi
+
+printf '%s\n' "Found ${#matches[@]} node_modules folder(s)."
+
+if [ "$dry_run" = 'true' ]; then
+	printf '%s\n' 'Dry run only:'
+	total_kb=0
+	for path in "${matches[@]}"; do
+		size_kb=$(get_size_kb "$path")
+		total_kb=$((total_kb + size_kb))
+		printf '%s\n' "  $(format_size "$size_kb")  $path"
+	done
+	printf '%s\n' "Total potential: $(format_size "$total_kb")"
+	exit 0
+fi
+
+deleted_kb=0
+for path in "${matches[@]}"; do
+	size_kb=$(get_size_kb "$path")
+	if [ "$auto_yes" = 'true' ]; then
+		printf '%s\n' "Deleting: $path ($(format_size "$size_kb"))"
+		rm -rf -- "$path"
+		deleted_kb=$((deleted_kb + size_kb))
+		continue
+	fi
+
+	printf '%s' "Delete $path? [y/N] "
+	read -r reply
+	case "$reply" in
+		y|Y|yes|YES)
+			rm -rf -- "$path"
+			deleted_kb=$((deleted_kb + size_kb))
+			printf '%s\n' "Deleted: $path ($(format_size "$size_kb"))"
+			;;
+		*)
+			printf '%s\n' "Skipped: $path"
+			;;
+	esac
+done
+
+if [ "$deleted_kb" -gt 0 ]; then
+	printf '%s\n' "Total space freed: $(format_size "$deleted_kb")"
+else
+	printf '%s\n' 'No folders deleted.'
+fi
